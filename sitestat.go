@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"regexp"
 
 	"github.com/cyfdecyf/bufio"
 )
@@ -231,6 +232,10 @@ func (ss *SiteStat) TempBlocked(url *URL) {
 }
 
 var alwaysDirectVisitCnt = newVisitCnt(userCnt, 0)
+var alwaysBlockedVisitCnt = newVisitCnt(0, userCnt)
+
+var alwaysDirectRegexp, alwaysBlockedRegexp *regexp.Regexp
+var directRegexpBuilt, blockedRegexpBuilt = false, false
 
 func (ss *SiteStat) GetVisitCnt(url *URL) (vcnt *VisitCnt) {
 	if parentProxy.empty() { // no way to retry, so always visit directly
@@ -238,6 +243,12 @@ func (ss *SiteStat) GetVisitCnt(url *URL) (vcnt *VisitCnt) {
 	}
 	if url.Domain == "" { // simple host or private ip
 		return alwaysDirectVisitCnt
+	}
+	if (directRegexpBuilt && alwaysDirectRegexp.MatchString(url.Host)) {
+		return alwaysDirectVisitCnt
+	}
+	if (blockedRegexpBuilt && alwaysBlockedRegexp.MatchString(url.Host)) {
+		return alwaysBlockedVisitCnt
 	}
 	if vcnt = ss.get(url.Host); vcnt != nil {
 		return
@@ -311,9 +322,57 @@ func (ss *SiteStat) store(statPath string) (err error) {
 	return
 }
 
+func rebuildRegexp(lst []string) (*regexp.Regexp, error) {
+	r, err := regexp.Compile(
+		"(" + strings.Join(lst, "|") + ")")
+	if (err != nil) {
+		return nil, err
+	} else {
+		return r, nil
+	}
+}
+
+var directSites, blockedSites []string
+
 func (ss *SiteStat) loadList(lst []string, direct, blocked vcntint) {
 	for _, d := range lst {
 		ss.Vcnt[d] = newVisitCntWithTime(direct, blocked, zeroTime)
+	}
+	if (len(lst) == 0) {
+		return
+	}
+	if (direct == userCnt) {
+		for _, addr := range lst {
+			addr = strings.Replace(addr, ".", "\\.", -1)
+			addr = strings.Replace(addr, "?", ".", -1)
+			addr = strings.Replace(addr, "*", ".*?", -1)
+			directSites = append(directSites, addr)
+		}
+		debug.Printf("building direct regex from %v", directSites)
+		r, err := rebuildRegexp(directSites)
+		if (err != nil) {
+			fmt.Printf("failed to build regex for direct sites: %s\n",
+				err.Error())
+		} else {
+			directRegexpBuilt = true
+			alwaysDirectRegexp = r
+		}
+	} else if (blocked == userCnt) {
+		for _, addr := range lst {
+			addr = strings.Replace(addr, ".", "\\.", -1)
+			addr = strings.Replace(addr, "?", ".", -1)
+			addr = strings.Replace(addr, "*", ".*?", -1)
+			blockedSites = append(blockedSites, addr)
+		}
+		debug.Printf("building blocked regex from %v", blockedSites)
+		r, err := rebuildRegexp(blockedSites)
+		if (err != nil) {
+			fmt.Printf("failed to build regex for blocked sites: %s\n",
+				err.Error())
+		} else {
+			blockedRegexpBuilt = true
+			alwaysBlockedRegexp = r
+		}
 	}
 }
 
